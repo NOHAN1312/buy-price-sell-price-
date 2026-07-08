@@ -6,6 +6,14 @@ let currentSearchQuery = "";
 let activeCategory = "all";
 let cart = [];
 
+// Firebase State Variables
+let firebaseApp = null;
+let db = null;
+let auth = null;
+let googleProvider = null;
+let currentUser = null;
+let pendingCloudData = null;
+
 // SVG Icons for Lock Toggle
 const LOCKED_SVG = `
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -21,25 +29,6 @@ const UNLOCKED_SVG = `
   </svg>
 `;
 
-// Dummy Data
-const DUMMY_PRODUCTS = [
-  { id: "1", name: "রূপচাঁদা সয়াবিন তেল ৫ লিটার", category: "তেল/ঘি", tags: "oil, five liter, soyabean", image: "", buyPrice: 790, sellPrice: 835, minPrice: 825, updatedAt: new Date().toISOString() },
-  { id: "2", name: "দেশী মসুর ডাল ১ কেজি", category: "চাল/ডাল", tags: "dal, pulses, mosur", image: "", buyPrice: 122, sellPrice: 135, minPrice: 130 },
-  { id: "3", name: "মিনিকেট চাল ৫০ কেজি (বস্তা)", category: "চাল/ডাল", tags: "rice, chal, miniket", image: "", buyPrice: 3150, sellPrice: 3380, minPrice: 3320 },
-  { id: "4", name: "তীর আটা ২ কেজি", category: "মুদি", tags: "flour, ata, teer", image: "", buyPrice: 94, sellPrice: 110, minPrice: 108 },
-  { id: "5", name: "ফ্রেশ সাদা চিনি ১ কেজি", category: "মুদি", tags: "sugar, chini, fresh", image: "", buyPrice: 126, sellPrice: 135, minPrice: 132 },
-  { id: "6", name: "এসিআই আয়োডিনযুক্ত লবণ ১ কেজি", category: "মসলা", tags: "salt, lobon, aci", image: "", buyPrice: 32, sellPrice: 42, minPrice: 40 },
-  { id: "7", name: "ডিপ্লোমা ফুল ক্রিম গুঁড়ো দুধ ৫০০ গ্রাম", category: "মুদি", tags: "milk powder, diploma, dudh", image: "", buyPrice: 415, sellPrice: 450, minPrice: 440 },
-  { id: "8", name: "লাইফবয় সাবান ৭৫ গ্রাম", category: "প্রসাধন", tags: "soap, lifebuoy, saban", image: "", buyPrice: 42, sellPrice: 50, minPrice: 48 },
-  { id: "9", name: "ইস্পাহানি মির্জাপুর চা পাতা ৪০০ গ্রাম", category: "পানীয়/ড্রিংকস", tags: "tea, cha pata, ispahani", image: "", buyPrice: 182, sellPrice: 215, minPrice: 208 },
-  { id: "10", name: "দেশী পেঁয়াজ ১ কেজি", category: "মসলা", tags: "onion, peaj", image: "", buyPrice: 65, sellPrice: 80, minPrice: 75 },
-  { id: "11", name: "লাল আলু ১ কেজি", category: "মসলা", tags: "potato, alu", image: "", buyPrice: 40, sellPrice: 50, minPrice: 48 },
-  { id: "12", name: "দেশী রসুন ১ কেজি", category: "মসলা", tags: "garlic, roshun", image: "", buyPrice: 180, sellPrice: 220, minPrice: 200 },
-  { id: "13", name: "লাক্স সাবান ১০০ গ্রাম", category: "প্রসাধন", tags: "soap, lux, saban", image: "", buyPrice: 62, sellPrice: 75, minPrice: 70 },
-  { id: "14", name: "প্যারাসুট নারিকেল তেল ২০০ মিলি", category: "তেল/ঘি", tags: "coconut oil, parachute, nikel tel", image: "", buyPrice: 125, sellPrice: 145, minPrice: 140 },
-  { id: "15", name: "প্রাণ নুডলস ৮ প্যাক", category: "পানীয়/ড্রিংকস", tags: "noodles, pran, nuduls", image: "", buyPrice: 140, sellPrice: 160, minPrice: 155 }
-];
-
 // Initialize Application
 window.addEventListener("DOMContentLoaded", () => {
   loadData();
@@ -47,6 +36,18 @@ window.addEventListener("DOMContentLoaded", () => {
   updateStats();
   renderCategoryFilters();
   renderProducts();
+
+  // Prefill and Initialize Firebase if Config is saved
+  const storedConfig = localStorage.getItem("dokandar_firebase_config");
+  if (storedConfig) {
+    initFirebase(storedConfig);
+    setTimeout(() => {
+      const configInput = document.getElementById("firebaseConfigInput");
+      if (configInput) configInput.value = storedConfig;
+    }, 300);
+  }
+  
+  checkSyncStatus();
 });
 
 // Load Data from LocalStorage
@@ -87,8 +88,8 @@ function loadData() {
       products = [];
     }
   } else {
-    // If empty, load dummy data for initial presentation
-    products = [...DUMMY_PRODUCTS];
+    // Starts completely empty (no dummy products automatically loaded)
+    products = [];
     saveData();
   }
 }
@@ -98,8 +99,10 @@ function saveData() {
   localStorage.setItem("dokandar_catalog_products", JSON.stringify(products));
   localStorage.setItem("dokandar_catalog_categories", JSON.stringify(categories));
   localStorage.setItem("dokandar_catalog_last_updated", new Date().toISOString());
+  localStorage.setItem("dokandar_catalog_sync_status", "unsynced"); // Unsynced status flag
   updateStats();
   renderCategoryFilters();
+  checkSyncStatus();
 }
 
 // Update Stats Panel
@@ -683,6 +686,347 @@ function printReceipt() {
   }, 100);
 }
 
+// Dynamic Firebase Initialization
+function initFirebase(configStr) {
+  if (!configStr) return;
+  try {
+    const config = JSON.parse(configStr);
+    
+    // Check if Firebase is loaded via CDN correctly
+    if (typeof firebase === 'undefined') {
+      console.error("Firebase CDN files not loaded yet!");
+      return;
+    }
+
+    if (!firebase.apps.length) {
+      firebaseApp = firebase.initializeApp(config);
+    } else {
+      firebaseApp = firebase.app();
+    }
+    
+    db = firebase.firestore();
+    auth = firebase.auth();
+    googleProvider = new firebase.auth.GoogleAuthProvider();
+
+    // Enable local persistence
+    db.enablePersistence().catch(err => {
+      console.warn("Firebase persistence warning:", err.code);
+    });
+
+    // Enable Google Sign-In button
+    const signInBtn = document.getElementById("signInBtn");
+    if (signInBtn) signInBtn.disabled = false;
+    
+    // Monitor Auth State Changes
+    auth.onAuthStateChanged(user => {
+      currentUser = user;
+      updateAuthUI();
+      checkSyncStatus();
+    });
+  } catch (e) {
+    console.error("Firebase init failed:", e);
+    showToast("ফায়ারবেস কনফিগারেশন সঠিক নয়!", "error");
+  }
+}
+
+// Save custom firebase config settings locally
+function saveFirebaseConfig() {
+  const textarea = document.getElementById("firebaseConfigInput");
+  if (!textarea) return;
+  
+  const configStr = textarea.value.trim();
+  if (!configStr) {
+    localStorage.removeItem("dokandar_firebase_config");
+    showToast("ফায়ারবেস কনফিগারেশন রিমুভ করা হয়েছে।", "info");
+    const signInBtn = document.getElementById("signInBtn");
+    if (signInBtn) signInBtn.disabled = true;
+    currentUser = null;
+    updateAuthUI();
+    checkSyncStatus();
+    return;
+  }
+  
+  try {
+    JSON.parse(configStr); // Validate JSON parsing
+    localStorage.setItem("dokandar_firebase_config", configStr);
+    showToast("ফায়ারবেস কনফিগারেশন সেভ হয়েছে!", "success");
+    initFirebase(configStr);
+  } catch (e) {
+    showToast("ভুল ফরম্যাট! সঠিক JSON কোড দিন।", "error");
+  }
+}
+
+// Google Authentication Handlers
+function signInWithGoogle() {
+  if (!auth) {
+    showToast("আগে ফায়ারবেস কনফিগারেশন সেটিংস চেক করুন।", "error");
+    return;
+  }
+  auth.signInWithPopup(googleProvider)
+    .then(result => {
+      showToast(`স্বাগতম, ${result.user.displayName}!`, "success");
+    })
+    .catch(err => {
+      console.error("Google Auth error:", err);
+      showToast("লগ-ইন ব্যর্থ হয়েছে: " + err.message, "error");
+    });
+}
+
+function signOutGoogle() {
+  if (!auth) return;
+  auth.signOut()
+    .then(() => {
+      showToast("সফলভাবে লগ-আউট করা হয়েছে।", "info");
+      currentUser = null;
+      updateAuthUI();
+      checkSyncStatus();
+    })
+    .catch(err => {
+      showToast("লগ-আউট ব্যর্থ হয়েছে।", "error");
+    });
+}
+
+// Update authentication section in UI
+function updateAuthUI() {
+  const signedOutDiv = document.getElementById("googleAuthSignedOut");
+  const signedInDiv = document.getElementById("googleAuthSignedIn");
+  const profilePic = document.getElementById("googleUserProfilePic");
+  const userName = document.getElementById("googleUserName");
+  const userEmail = document.getElementById("googleUserEmail");
+  
+  if (!signedOutDiv || !signedInDiv) return;
+  
+  if (currentUser) {
+    signedOutDiv.style.display = "none";
+    signedInDiv.style.display = "flex";
+    if (profilePic) profilePic.src = currentUser.photoURL || "https://www.gravatar.com/avatar/?d=mp";
+    if (userName) userName.textContent = currentUser.displayName || "ব্যবহারকারী";
+    if (userEmail) userEmail.textContent = currentUser.email || "";
+  } else {
+    signedOutDiv.style.display = "flex";
+    signedInDiv.style.display = "none";
+  }
+}
+
+// Check Sync status and update header button colors
+function checkSyncStatus() {
+  const syncBtn = document.getElementById("headerSyncBtn");
+  if (!syncBtn) return;
+  
+  if (!currentUser) {
+    syncBtn.className = "sync-btn";
+    syncBtn.title = "ক্লাউড সিঙ্ক করতে গুগল লগ-ইন করুন";
+    return;
+  }
+  
+  const status = localStorage.getItem("dokandar_catalog_sync_status") || "unsynced";
+  if (status === "unsynced") {
+    syncBtn.className = "sync-btn unsynced";
+    syncBtn.title = "সিঙ্ক অমিল: নতুন ডাটা আপলোড করতে ক্লিক করুন";
+  } else {
+    syncBtn.className = "sync-btn synced";
+    syncBtn.title = "ক্লাউডের সাথে ডাটা সম্পূর্ণ সিঙ্কড";
+  }
+}
+
+// Cloud Sync Orchestration
+function triggerSync() {
+  if (!currentUser) {
+    openSettingsModal();
+    showToast("ক্লাউড সিঙ্ক করতে প্রথমে ফায়ারবেস কনফিগার ও গুগল লগ-ইন করুন।", "info");
+    return;
+  }
+  
+  if (!db) {
+    showToast("ফায়ারবেস ডাটাবেস প্রস্তুত নয়!", "error");
+    return;
+  }
+  
+  showToast("ক্লাউডের সাথে সংযোগ করা হচ্ছে...", "info");
+  
+  db.collection("users").doc(currentUser.uid).get()
+    .then(doc => {
+      if (!doc.exists) {
+        // Cloud dataset empty, upload local storage directly
+        uploadToCloud();
+      } else {
+        const cloudData = doc.data();
+        const localUpdated = localStorage.getItem("dokandar_catalog_last_updated");
+        const cloudUpdated = cloudData.lastUpdated;
+        
+        const isLocalSynced = (localStorage.getItem("dokandar_catalog_sync_status") || "unsynced") === "synced";
+        
+        if (localUpdated === cloudUpdated && isLocalSynced) {
+          showToast("আপনার ডাটা ইতিমধ্যে ক্লাউডের সাথে সিঙ্কড আছে।", "success");
+          localStorage.setItem("dokandar_catalog_sync_status", "synced");
+          checkSyncStatus();
+        } else {
+          // Open Sync Modal to let the user resolve conflicts
+          pendingCloudData = cloudData;
+          openSyncModal(localUpdated, cloudUpdated);
+        }
+      }
+    })
+    .catch(err => {
+      console.error("Fetch Cloud Backup Error:", err);
+      showToast("ক্লাউড সিঙ্ক ব্যর্থ হয়েছে: " + err.message, "error");
+    });
+}
+
+// Resolve Conflict choices
+function resolveSyncConflict(action) {
+  closeSyncModal();
+  if (!pendingCloudData) return;
+  
+  if (action === "upload") {
+    uploadToCloud();
+  } else if (action === "download") {
+    downloadFromCloud(pendingCloudData);
+  } else if (action === "merge") {
+    autoMergeCatalogs(pendingCloudData);
+  }
+  
+  pendingCloudData = null;
+}
+
+// Upload local catalog to cloud
+function uploadToCloud() {
+  if (!currentUser || !db) return;
+  showToast("ক্লাউডে আপলোড করা হচ্ছে...", "info");
+  
+  const lastUpdated = localStorage.getItem("dokandar_catalog_last_updated") || new Date().toISOString();
+  
+  const dataToUpload = {
+    products: products,
+    categories: categories,
+    lastUpdated: lastUpdated
+  };
+  
+  db.collection("users").doc(currentUser.uid).set(dataToUpload)
+    .then(() => {
+      localStorage.setItem("dokandar_catalog_sync_status", "synced");
+      checkSyncStatus();
+      showToast("ক্লাউড সিঙ্ক সফল হয়েছে! (আপলোড সম্পন্ন)", "success");
+    })
+    .catch(err => {
+      console.error("Upload fail:", err);
+      showToast("আপলোড ব্যর্থ হয়েছে: " + err.message, "error");
+    });
+}
+
+// Download cloud catalog to local
+function downloadFromCloud(cloudData) {
+  if (!cloudData) return;
+  showToast("ডিভাইসে ডাউনলোড করা হচ্ছে...", "info");
+  
+  products = cloudData.products || [];
+  categories = cloudData.categories || ["মুদি", "মসলা", "চাল/ডাল", "তেল/ঘি", "পানীয়/ড্রিংকস", "প্রসাধন", "অন্যান্য"];
+  
+  if (!categories.includes("অন্যান্য")) {
+    categories.push("অন্যান্য");
+  }
+  
+  // Overwrite local catalog storage
+  localStorage.setItem("dokandar_catalog_products", JSON.stringify(products));
+  localStorage.setItem("dokandar_catalog_categories", JSON.stringify(categories));
+  localStorage.setItem("dokandar_catalog_last_updated", cloudData.lastUpdated || new Date().toISOString());
+  localStorage.setItem("dokandar_catalog_sync_status", "synced");
+  
+  // Re-render views
+  renderCategoryFilters();
+  renderProducts();
+  updateStats();
+  checkSyncStatus();
+  
+  showToast("ক্লাউড সিঙ্ক সফল হয়েছে! (ডাউনলোড সম্পন্ন)", "success");
+}
+
+// Merge cloud and local catalogs dynamically
+function autoMergeCatalogs(cloudData) {
+  if (!cloudData) return;
+  showToast("ডাটা মার্জ করা হচ্ছে...", "info");
+  
+  const cloudProducts = cloudData.products || [];
+  const cloudCategories = cloudData.categories || [];
+  
+  // Union of category tags
+  const mergedCategoriesSet = new Set([...categories, ...cloudCategories]);
+  categories = Array.from(mergedCategoriesSet);
+  if (!categories.includes("অন্যান্য")) {
+    categories.push("অন্যান্য");
+  }
+  
+  // Merge items matching ID, keeping the latest updatedAt timestamp
+  const localProductsMap = new Map(products.map(p => [p.id, p]));
+  const cloudProductsMap = new Map(cloudProducts.map(p => [p.id, p]));
+  
+  const allIds = new Set([...localProductsMap.keys(), ...cloudProductsMap.keys()]);
+  const mergedProducts = [];
+  
+  allIds.forEach(id => {
+    const localProd = localProductsMap.get(id);
+    const cloudProd = cloudProductsMap.get(id);
+    
+    if (localProd && cloudProd) {
+      const localTime = localProd.updatedAt ? new Date(localProd.updatedAt).getTime() : 0;
+      const cloudTime = cloudProd.updatedAt ? new Date(cloudProd.updatedAt).getTime() : 0;
+      
+      if (localTime >= cloudTime) {
+        mergedProducts.push(localProd);
+      } else {
+        mergedProducts.push(cloudProd);
+      }
+    } else if (localProd) {
+      mergedProducts.push(localProd);
+    } else if (cloudProd) {
+      mergedProducts.push(cloudProd);
+    }
+  });
+  
+  products = mergedProducts;
+  
+  // Save combined dataset local storage
+  const nowStr = new Date().toISOString();
+  localStorage.setItem("dokandar_catalog_products", JSON.stringify(products));
+  localStorage.setItem("dokandar_catalog_categories", JSON.stringify(categories));
+  localStorage.setItem("dokandar_catalog_last_updated", nowStr);
+  
+  // Re-render
+  renderCategoryFilters();
+  renderProducts();
+  updateStats();
+  
+  // Push changes back to Firestore
+  uploadToCloud();
+}
+
+// Sync Modal Controls
+function openSyncModal(localTimeISO, cloudTimeISO) {
+  const modal = document.getElementById("syncModal");
+  const localText = document.getElementById("syncLocalTime");
+  const cloudText = document.getElementById("syncCloudTime");
+  
+  if (!modal || !localText || !cloudText) return;
+  
+  const formatDate = (isoStr) => {
+    if (!isoStr) return "নাই";
+    const date = new Date(isoStr);
+    return date.toLocaleDateString("bn-BD") + " " + date.toLocaleTimeString("bn-BD", { hour: '2-digit', minute: '2-digit' });
+  };
+  
+  localText.textContent = formatDate(localTimeISO);
+  cloudText.textContent = formatDate(cloudTimeISO);
+  
+  modal.classList.add("active");
+}
+
+function closeSyncModal() {
+  const modal = document.getElementById("syncModal");
+  if (modal) {
+    modal.classList.remove("active");
+  }
+}
+
 // Modal handling for Product Form
 const productModal = document.getElementById("productModal");
 
@@ -832,80 +1176,6 @@ function openSettingsModal() {
 function closeSettingsModal() {
   settingsModal.classList.remove("active");
 }
-
-// Backup Export
-function exportData() {
-  if (products.length === 0) {
-    showToast("কোনো প্রোডাক্ট ডাটা নেই ব্যাকআপ করার জন্য।", "error");
-    return;
-  }
-  
-  const dataStr = JSON.stringify(products, null, 2);
-  const blob = new Blob([dataStr], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  
-  const date = new Date().toISOString().slice(0, 10);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `dokandar_backup_${date}.json`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-  
-  showToast("ব্যাকআপ ফাইল সফলভাবে ডাউনলোড হয়েছে।", "success");
-}
-
-// Backup Import
-function importData(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const imported = JSON.parse(e.target.result);
-      if (Array.isArray(imported)) {
-        // Validate items loosely
-        const isValid = imported.every(item => item.name && typeof item.sellPrice === 'number');
-        if (isValid) {
-          const confirmImport = confirm("আপনি কি নিশ্চিতভাবে নতুন ব্যাকআপটি ইমপোর্ট করতে চান? এর ফলে বর্তমান তালিকাটি প্রতিস্থাপিত হবে।");
-          if (confirmImport) {
-            products = imported.map(item => ({
-              ...item,
-              category: item.category || "অন্যান্য",
-              tags: item.tags || "",
-              image: item.image || ""
-            }));
-            
-            // Scan for imported categories to dynamically register them
-            imported.forEach(item => {
-              if (item.category && !categories.includes(item.category)) {
-                categories.push(item.category);
-              }
-            });
-            
-            saveData();
-            renderProducts();
-            closeSettingsModal();
-            showToast("ব্যাকআপ সফলভাবে রিস্টোর হয়েছে!", "success");
-          }
-        } else {
-          showToast("ফাইলের ফরম্যাট সঠিক নয়।", "error");
-        }
-      } else {
-        showToast("ফাইলের ডাটা সঠিক নয়।", "error");
-      }
-    } catch (err) {
-      showToast("ফাইল পড়তে সমস্যা হয়েছে। সঠিক JSON ফাইল দিন।", "error");
-    }
-    // reset file input
-    document.getElementById("importFileInput").value = "";
-  };
-  reader.readAsText(file);
-}
-
-
 
 // Toast Notifications System
 function showToast(message, type = "success") {
