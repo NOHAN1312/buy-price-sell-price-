@@ -38,14 +38,26 @@ window.addEventListener("DOMContentLoaded", () => {
   renderProducts();
 
   // Prefill and Initialize Firebase if Config is saved
-  const storedConfig = localStorage.getItem("dokandar_firebase_config");
-  if (storedConfig) {
-    initFirebase(storedConfig);
-    setTimeout(() => {
-      const configInput = document.getElementById("firebaseConfigInput");
-      if (configInput) configInput.value = storedConfig;
-    }, 300);
+  let storedConfig = localStorage.getItem("dokandar_firebase_config");
+  if (!storedConfig) {
+    const defaultConfig = {
+      apiKey: "AIzaSyAuiCpbxshjWobzpDKwctuD5mHrD2WqHUI",
+      authDomain: "tool-1758276491972.firebaseapp.com",
+      projectId: "tool-1758276491972",
+      storageBucket: "tool-1758276491972.firebasestorage.app",
+      messagingSenderId: "618423947615",
+      appId: "1:618423947615:web:dc4a88785b3c33fe7ba6ea",
+      measurementId: "G-FW71NT091X"
+    };
+    storedConfig = JSON.stringify(defaultConfig);
+    localStorage.setItem("dokandar_firebase_config", storedConfig);
   }
+
+  initFirebase(storedConfig);
+  setTimeout(() => {
+    const configInput = document.getElementById("firebaseConfigInput");
+    if (configInput) configInput.value = storedConfig;
+  }, 300);
   
   checkSyncStatus();
 });
