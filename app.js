@@ -747,12 +747,19 @@ function saveFirebaseConfig() {
   }
   
   try {
-    JSON.parse(configStr); // Validate JSON parsing
-    localStorage.setItem("dokandar_firebase_config", configStr);
+    // Parse using relaxed JS object parser instead of strict JSON.parse
+    // This allows copy-pasting directly from Firebase console (where keys have no quotes)
+    const config = new Function("return (" + configStr + ")")();
+    if (typeof config !== "object" || config === null) {
+      throw new Error("Invalid object format");
+    }
+    
+    const strictJSON = JSON.stringify(config);
+    localStorage.setItem("dokandar_firebase_config", strictJSON);
     showToast("ফায়ারবেস কনফিগারেশন সেভ হয়েছে!", "success");
-    initFirebase(configStr);
+    initFirebase(strictJSON);
   } catch (e) {
-    showToast("ভুল ফরম্যাট! সঠিক JSON কোড দিন।", "error");
+    showToast("ভুল ফরম্যাট! সঠিক JSON বা অবজেক্ট দিন।", "error");
   }
 }
 
